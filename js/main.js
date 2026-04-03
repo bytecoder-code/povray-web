@@ -475,6 +475,7 @@ async function startRender() {
 
     try {
         statusText.textContent = 'Parsing...';
+        appendLog('Starting parse...', 'info');
         saveCurrentInclude();
         // Build include cache from .povz bundle includes
         const includeCache = new Map();
@@ -687,4 +688,7 @@ document.addEventListener('keydown', (e) => {
     }
 });
 
-init();
+init().catch(e => {
+    console.error('Init failed:', e);
+    document.getElementById('status-text').textContent = `Error: ${e.message}`;
+});
