@@ -234,11 +234,15 @@ export class Preprocessor {
     }
 
     _handleIfdef(negate) {
-        // #ifdef(Name) or #ifndef(Name)
+        // #ifdef(Name) or #ifndef(Name) — may include array index: #ifdef(Name[I])
         this._expectRaw('(');
         const nameTok = this._tokenizer.next();
         const name = nameTok.value;
-        this._expectRaw(')');
+        // Consume any remaining tokens until ) (handles array index syntax)
+        while (true) {
+            const tok = this._tokenizer.next();
+            if (tok.type === RAW_TOKEN.EOF || tok.value === ')') break;
+        }
 
         let defined = this.ppSymbols.has(name) || this.macroTable.isDefined(name);
         if (negate) defined = !defined;
@@ -564,19 +568,11 @@ export class Preprocessor {
                     const val = this.evaluator.evalFloat(condTokens);
                     this._emitConditionalBlock(depth, val);
                     continue;
-                } else if (dir === 'ifdef') {
-                    this._expectRaw('(');
-                    const nameTok = this._tokenizer.next();
-                    this._expectRaw(')');
-                    const defined = this.ppSymbols.has(nameTok.value) || this.macroTable.isDefined(nameTok.value);
-                    this._emitConditionalBlock(depth, defined);
-                    continue;
-                } else if (dir === 'ifndef') {
-                    this._expectRaw('(');
-                    const nameTok = this._tokenizer.next();
-                    this._expectRaw(')');
-                    const defined = this.ppSymbols.has(nameTok.value) || this.macroTable.isDefined(nameTok.value);
-                    this._emitConditionalBlock(depth, !defined);
+                } else if (dir === 'ifdef' || dir === 'ifndef') {
+                    const condTokens = this._collectUntilParen();
+                    const name = condTokens[0]?.value || '';
+                    const defined = this.ppSymbols.has(name) || this.macroTable.isDefined(name);
+                    this._emitConditionalBlock(depth, dir === 'ifndef' ? !defined : defined);
                     continue;
                 } else if (dir === 'declare' || dir === 'local') {
                     // Nested #declare/#local inside a deferred body — emit verbatim
@@ -628,18 +624,11 @@ export class Preprocessor {
                             const condTokens = this._collectUntilParen();
                             const val = this.evaluator.evalFloat(condTokens);
                             this._emitConditionalBlock(outerBraceDepth, val);
-                        } else if (dir === 'ifdef') {
-                            this._expectRaw('(');
-                            const nameTok = this._tokenizer.next();
-                            this._expectRaw(')');
-                            const defined = this.ppSymbols.has(nameTok.value) || this.macroTable.isDefined(nameTok.value);
-                            this._emitConditionalBlock(outerBraceDepth, defined);
-                        } else if (dir === 'ifndef') {
-                            this._expectRaw('(');
-                            const nameTok = this._tokenizer.next();
-                            this._expectRaw(')');
-                            const defined = this.ppSymbols.has(nameTok.value) || this.macroTable.isDefined(nameTok.value);
-                            this._emitConditionalBlock(outerBraceDepth, !defined);
+                        } else if (dir === 'ifdef' || dir === 'ifndef') {
+                            const cTokens = this._collectUntilParen();
+                            const nm = cTokens[0]?.value || '';
+                            const def = this.ppSymbols.has(nm) || this.macroTable.isDefined(nm);
+                            this._emitConditionalBlock(outerBraceDepth, dir === 'ifndef' ? !def : def);
                         } else {
                             // Other nesting directives in active branch — skip body
                             ifDepth++;
