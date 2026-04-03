@@ -63,11 +63,16 @@ async function init() {
     // Check for ?file= query parameter (shell integration)
     const params = new URLSearchParams(location.search);
     const fileUrl = params.get('file');
+    console.log('init: fileUrl=', fileUrl);
     if (fileUrl) {
+        console.log('init: loading from URL...');
         await loadFromUrl(fileUrl);
+        console.log('init: loaded, editor length=', editor.value?.length);
         // Auto-render when loaded from URL
         if (editor.value && editor.value.trim()) {
+            console.log('init: starting render...');
             await startRender();
+            console.log('init: render done');
         }
     }
 }
