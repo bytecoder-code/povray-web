@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>POV-Ray Web</title>
+    <meta name="description" content="A web-based POV-Ray ray tracer — render photorealistic scenes directly in your browser using WebGPU and WebGL2.">
+    <meta property="og:title" content="POV-Ray Web">
+    <meta property="og:description" content="A web-based POV-Ray ray tracer — render photorealistic scenes directly in your browser.">
+    <meta property="og:image" content="og-image.png">
+    <meta property="og:type" content="website">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="POV-Ray Web">
+    <meta name="twitter:description" content="A web-based POV-Ray ray tracer — render photorealistic scenes directly in your browser.">
+    <meta name="twitter:image" content="og-image.png">
+    <link rel="stylesheet" href="css/main.css">
+    <link rel="stylesheet" href="css/editor.css">
+</head>
+<body>
+    <div id="app">
+        <header id="header">
+            <h1>POV-Ray Web <span class="version">1.0.0</span></h1>
+            <div id="controls">
+                <button id="btn-render" title="Render scene">Render</button>
+                <button id="btn-stop" title="Stop rendering" disabled>Stop</button>
+                <button id="btn-save" title="Save rendered image (Ctrl+S)">Save</button>
+                <select id="select-backend" title="Rendering backend">
+                    <option value="auto">Auto</option>
+                    <option value="webgpu">WebGPU</option>
+                    <option value="webgl2">WebGL2</option>
+                    <option value="cpu">CPU</option>
+                </select>
+                <label>
+                    Width: <input id="input-width" type="number" value="640" min="64" max="4096" step="64">
+                </label>
+                <label>
+                    Height: <input id="input-height" type="number" value="480" min="64" max="4096" step="64">
+                </label>
+                <label>
+                    AA: <select id="select-aa" title="Anti-aliasing samples">
+                        <option value="1">Off</option>
+                        <option value="4">4x</option>
+                        <option value="9">9x</option>
+                        <option value="16">16x</option>
+                    </select>
+                </label>
+                <span id="status-text">Ready</span>
+            </div>
+        </header>
+        <main id="main">
+            <div id="editor-panel">
+                <div id="editor-header">
+                    <div id="editor-tabs">
+                        <button class="tab active" data-tab="scene">Scene</button>
+                        <button class="tab" data-tab="includes">Includes <span id="include-count"></span></button>
+                        <button class="tab" data-tab="assets">Assets <span id="asset-count"></span></button>
+                    </div>
+                    <button id="btn-load" title="Load .pov or .povz file">Load File</button>
+                    <input type="file" id="file-input" accept=".pov,.povz,.inc,.ini" style="display:none">
+                </div>
+                <div id="tab-scene" class="tab-content active">
+                <textarea id="scene-editor" spellcheck="false">// POV-Ray Web — Primitives Showcase
+
+camera {
+    location <0, 3.5, -8>
+    look_at <0, 1, 0>
+    angle 50
+}
+
+light_source { <5, 12, -8>, color rgb <1, 1, 1> }
+light_source { <-4, 8, -6>, color rgb <0.3, 0.3, 0.5> }
+
+// Red sphere with reflection
+sphere {
+    <0, 1, 0>, 1
+    pigment { color rgb <0.9, 0.15, 0.15> }
+    finish {
+        specular 0.6
+        roughness 0.02
+        reflection { 0.15 }
+    }
+}
+
+// Blue box
+box {
+    <-0.6, 0, -0.6>, <0.6, 1.8, 0.6>
+    pigment { color rgb <0.2, 0.4, 0.9> }
+    finish { diffuse 0.7 phong 0.4 phong_size 20 }
+    rotate <0, 25, 0>
+    translate <2.5, 0, 0.5>
+}
+
+// Green cylinder
+cylinder {
+    <0, 0, 0>, <0, 2, 0>, 0.5
+    pigment { color rgb <0.2, 0.8, 0.3> }
+    finish { diffuse 0.7 specular 0.3 roughness 0.05 }
+    translate <-2.5, 0, 0.5>
+}
+
+// Gold cone
+cone {
+    <0, 0, 0>, 0.7,
+    <0, 1.8, 0>, 0.0
+    pigment { color rgb <0.85, 0.65, 0.13> }
+    finish { specular 0.5 roughness 0.03 metallic 1 }
+    translate <-1, 0, 2.5>
+}
+
+// Purple torus
+torus {
+    0.7, 0.25
+    pigment { color rgb <0.6, 0.2, 0.8> }
+    finish { specular 0.5 roughness 0.04 }
+    translate <1.5, 0.25, -1.5>
+}
+
+// Checkered ground plane
+plane {
+    <0, 1, 0>, 0
+    pigment {
+        checker
+        color rgb <0.9, 0.9, 0.9>
+        color rgb <0.15, 0.15, 0.15>
+    }
+    finish { diffuse 0.7 reflection { 0.05 } }
+}
+
+background { color rgb <0.08, 0.08, 0.12> }
+</textarea>
+                </div>
+                <div id="tab-includes" class="tab-content">
+                    <div id="includes-toolbar">
+                        <select id="include-select"><option value="">No includes loaded</option></select>
+                        <button id="btn-add-include" title="Add new include file">+ New</button>
+                        <button id="btn-del-include" title="Delete selected include">Delete</button>
+                    </div>
+                    <textarea id="include-editor" spellcheck="false" placeholder="Select or create an include file..."></textarea>
+                </div>
+                <div id="tab-assets" class="tab-content">
+                    <div id="assets-list"></div>
+                </div>
+            </div>
+            <div id="viewport-panel">
+                <div id="viewport-tabs">
+                    <button class="vtab active" data-vtab="render">Render</button>
+                    <button class="vtab" data-vtab="log">Log <span id="log-badge" style="display:none"></span></button>
+                </div>
+                <div id="vtab-render" class="vtab-content active">
+                    <div id="canvas-container">
+                        <canvas id="gpu-canvas" width="640" height="480"></canvas>
+                        <canvas id="cpu-canvas" width="640" height="480" style="display:none"></canvas>
+                    </div>
+                </div>
+                <div id="vtab-log" class="vtab-content">
+                    <div id="log-toolbar">
+                        <button id="btn-copy-log" title="Copy log to clipboard">Copy</button>
+                        <button id="btn-clear-log" title="Clear log">Clear</button>
+                    </div>
+                    <pre id="log-output"></pre>
+                </div>
+                <div id="progress-bar-container">
+                    <div id="progress-bar"></div>
+                </div>
+            </div>
+        </main>
+    </div>
+    <script type="module" src="js/main.js"></script>
+</body>
+</html>
