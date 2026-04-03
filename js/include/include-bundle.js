@@ -16393,5 +16393,11 @@ texture {
 
 #version Woods_Inc_Temp;
 #end
+`,
+    'html_gen.inc': `// html_gen.inc stub for POV-Ray Web
+// The HTMLgen macro generates HTML files which is not applicable in a web context.
+// This stub defines the macro signature so scenes that include it don't error.
+#macro HTMLgen(FileName, OutName, Keyword, Data, NrH_Images, NrV_Images, IW, IH, Comment)
+#end
 `
 };
