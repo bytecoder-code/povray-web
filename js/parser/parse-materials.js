@@ -94,13 +94,24 @@ export function parsePigment(parser) {
         else if (tok.id === T.COLOUR_MAP_TOKEN) {
             parser.scanner.getToken();
             parser.expect(T.LEFT_CURLY_TOKEN);
-            pigment.colorMap = [];
-            while (parser.scanner.peek().id === T.LEFT_SQUARE_TOKEN) {
+            // Check for colour_map identifier reference: color_map { MapName }
+            const cmPeek = parser.scanner.peek();
+            if (cmPeek.id === T.COLOUR_MAP_ID_TOKEN) {
                 parser.scanner.getToken();
-                const val = parseFloat(parser);
-                const color = parseColour(parser);
-                parser.expect(T.RIGHT_SQUARE_TOKEN);
-                pigment.colorMap.push([val, color]);
+                pigment.colorMap = Array.isArray(cmPeek.value) ? cmPeek.value : [];
+            } else if (cmPeek.id === T.IDENTIFIER_TOKEN) {
+                // Unknown identifier — skip it, use empty map
+                parser.scanner.getToken();
+                pigment.colorMap = [];
+            } else {
+                pigment.colorMap = [];
+                while (parser.scanner.peek().id === T.LEFT_SQUARE_TOKEN) {
+                    parser.scanner.getToken();
+                    const val = parseFloat(parser);
+                    const color = parseColour(parser);
+                    parser.expect(T.RIGHT_SQUARE_TOKEN);
+                    pigment.colorMap.push([val, color]);
+                }
             }
             parser.expect(T.RIGHT_CURLY_TOKEN);
         }

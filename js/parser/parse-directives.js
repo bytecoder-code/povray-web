@@ -9,26 +9,17 @@ import { parseObject } from './parse-objects.js';
 import { parseTexture, parsePigment, parseFinish, parseNormal } from './parse-materials.js';
 import { parseCamera } from './parse-camera.js';
 
+// Pass 2 directive handler — only handles directives that survive preprocessing
 export function handleDirective(parser, tok) {
     switch (tok.id) {
         case T.DECLARE_TOKEN: return handleDeclare(parser, false);
         case T.LOCAL_TOKEN: return handleDeclare(parser, true);
-        case T.INCLUDE_TOKEN: return handleInclude(parser);
-        case T.IF_TOKEN: return handleIf(parser);
-        case T.IFDEF_TOKEN: return handleIfdef(parser, false);
-        case T.IFNDEF_TOKEN: return handleIfdef(parser, true);
-        case T.WHILE_TOKEN: return handleWhile(parser);
-        case T.FOR_TOKEN: return handleFor(parser);
-        case T.SWITCH_TOKEN: return handleSwitch(parser);
-        case T.MACRO_TOKEN: return handleMacroDef(parser);
         case T.UNDEF_TOKEN: return handleUndef(parser);
         case T.VERSION_TOKEN: return handleVersion(parser);
         case T.WARNING_TOKEN: return handleMessage(parser, 'warning');
         case T.ERROR_TOKEN: return handleMessage(parser, 'error');
         case T.DEBUG_TOKEN: return handleMessage(parser, 'debug');
         case T.DEFAULT_TOKEN: return handleDefault(parser);
-        case T.BREAK_TOKEN: return 'break';
-        case T.END_TOKEN: return 'end';
         default: return null;
     }
 }
@@ -113,6 +104,36 @@ function handleDeclare(parser, isLocal) {
         return;
     }
 
+    // Interior declaration
+    if (peek.id === T.INTERIOR_TOKEN) {
+        parser.scanner.getToken();
+        parser.expect(T.LEFT_CURLY_TOKEN);
+        parser.skipBlock();
+        parser.symbolTable.declare(name, SYMBOL_TYPE.INTERIOR, {}, isLocal);
+        consumeOptionalSemicolon(parser);
+        return;
+    }
+
+    // Material declaration
+    if (peek.id === T.MATERIAL_TOKEN) {
+        parser.scanner.getToken();
+        parser.expect(T.LEFT_CURLY_TOKEN);
+        parser.skipBlock();
+        parser.symbolTable.declare(name, SYMBOL_TYPE.MATERIAL, {}, isLocal);
+        consumeOptionalSemicolon(parser);
+        return;
+    }
+
+    // Media declaration
+    if (peek.id === T.MEDIA_TOKEN) {
+        parser.scanner.getToken();
+        parser.expect(T.LEFT_CURLY_TOKEN);
+        parser.skipBlock();
+        parser.symbolTable.declare(name, SYMBOL_TYPE.MEDIA, {}, isLocal);
+        consumeOptionalSemicolon(parser);
+        return;
+    }
+
     // Color identifier (rgb, rgbf, etc.) or existing colour variable (White*0.5)
     if (peek.id === T.RGB_TOKEN || peek.id === T.RGBF_TOKEN || peek.id === T.RGBT_TOKEN ||
         peek.id === T.RGBFT_TOKEN || peek.id === T.COLOUR_TOKEN || peek.id === T.SRGB_TOKEN ||
@@ -126,11 +147,11 @@ function handleDeclare(parser, isLocal) {
             const next = parser.scanner.peek();
             if (next.id === T.STAR_TOKEN) {
                 parser.scanner.getToken();
-                const s = parseFloat(parser);
+                const s = parseSimpleFloat(parser);
                 result = result.map(v => v * s);
             } else if (next.id === T.SLASH_TOKEN) {
                 parser.scanner.getToken();
-                const s = parseFloat(parser);
+                const s = parseSimpleFloat(parser);
                 if (s !== 0) result = result.map(v => v / s);
             } else if (next.id === T.PLUS_TOKEN) {
                 parser.scanner.getToken();
@@ -218,12 +239,25 @@ function handleDeclare(parser, isLocal) {
         const size = parseFloat(parser);
         parser.expect(T.RIGHT_SQUARE_TOKEN);
         const arr = new Array(Math.floor(size));
-        // Check for initializer
+        // Check for initializer { val, val, ... }
         if (parser.scanner.peek().id === T.LEFT_CURLY_TOKEN) {
             parser.scanner.getToken();
             let i = 0;
-            while (parser.scanner.peek().id !== T.RIGHT_CURLY_TOKEN && i < arr.length) {
-                arr[i] = parseFloat(parser);
+            while (parser.scanner.peek().id !== T.RIGHT_CURLY_TOKEN &&
+                   parser.scanner.peek().id !== T.END_OF_FILE_TOKEN && i < arr.length) {
+                const elemPeek = parser.scanner.peek();
+                if (elemPeek.id === T.STRING_LITERAL_TOKEN || elemPeek.id === T.STRING_ID_TOKEN) {
+                    arr[i] = parseString(parser);
+                } else if (elemPeek.id === T.LEFT_ANGLE_TOKEN || elemPeek.id === T.X_TOKEN ||
+                           elemPeek.id === T.Y_TOKEN || elemPeek.id === T.Z_TOKEN ||
+                           elemPeek.id === T.VECTOR_ID_TOKEN) {
+                    arr[i] = parseVector(parser);
+                } else if (elemPeek.id === T.RGB_TOKEN || elemPeek.id === T.COLOUR_TOKEN ||
+                           elemPeek.id === T.COLOUR_ID_TOKEN) {
+                    arr[i] = parseColour(parser);
+                } else {
+                    arr[i] = parseFloat(parser);
+                }
                 i++;
                 if (parser.scanner.peek().id === T.COMMA_TOKEN) parser.scanner.getToken();
             }
@@ -238,6 +272,22 @@ function handleDeclare(parser, isLocal) {
     const val = parseFloat(parser);
     parser.symbolTable.declare(name, SYMBOL_TYPE.FLOAT, val, isLocal);
     consumeOptionalSemicolon(parser);
+}
+
+// Parse a simple float value — number, identifier, or (expr) — without consuming +/-
+function parseSimpleFloat(parser) {
+    const tok = parser.scanner.getToken();
+    if (tok.id === T.FLOAT_TOKEN) return tok.value;
+    if (tok.id === T.FLOAT_ID_TOKEN) return typeof tok.value === 'number' ? tok.value : 0;
+    if (tok.id === T.DASH_TOKEN) return -parseSimpleFloat(parser);
+    if (tok.id === T.LEFT_PAREN_TOKEN) {
+        const val = parseFloat(parser);
+        parser.expect(T.RIGHT_PAREN_TOKEN);
+        return val;
+    }
+    // Unrecognized — put back and return 1
+    parser.scanner.ungetToken();
+    return 1;
 }
 
 function consumeOptionalSemicolon(parser) {

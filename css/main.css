@@ -84,6 +84,18 @@ html, body {
     cursor: default;
 }
 
+#btn-render.dirty {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+    animation: pulse-render 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse-render {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+}
+
 #controls label {
     color: var(--text-secondary);
 }
@@ -108,10 +120,16 @@ html, body {
     font-size: 12px;
 }
 
+#status-bar {
+    padding: 3px 12px;
+    background: var(--bg-secondary);
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
 #status-text {
     color: var(--text-secondary);
-    font-size: 12px;
-    min-width: 120px;
+    font-size: 11px;
 }
 
 #main {

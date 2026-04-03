@@ -70,17 +70,56 @@ const SYMBOL_TYPE_TO_TOKEN = new Map([
 ]);
 
 export class Scanner {
-    constructor(tokenizer, symbolTable) {
-        this._tokenizer = tokenizer;
+    // Accepts either a Tokenizer instance or a flat raw token array
+    constructor(tokenizerOrTokens, symbolTable) {
         this._symbolTable = symbolTable;
         this._putback = null;
         this._current = null;
-        this._tokenQueue = []; // For macro expansion replay
+        this._currentFile = '<scene>';
+        this._currentLine = 1;
+
+        if (Array.isArray(tokenizerOrTokens)) {
+            // Flat token array from preprocessor (Pass 2 mode)
+            this._tokens = tokenizerOrTokens;
+            this._pos = 0;
+            this._tokenizer = null;
+            this._tokenQueue = null;
+        } else {
+            // Tokenizer instance (legacy single-pass mode)
+            this._tokenizer = tokenizerOrTokens;
+            this._tokens = null;
+            this._tokenQueue = [];
+        }
     }
 
-    // Push tokens to front of queue (for macro body replay)
+    // Push tokens to front of queue (legacy mode only)
     pushTokens(tokens) {
-        this._tokenQueue = tokens.concat(this._tokenQueue);
+        if (this._tokenQueue) {
+            this._tokenQueue = tokens.concat(this._tokenQueue);
+        }
+    }
+
+    _nextRaw() {
+        // Flat array mode
+        if (this._tokens) {
+            while (this._pos < this._tokens.length) {
+                const tok = this._tokens[this._pos++];
+                // Handle source markers from preprocessor
+                if (tok.type === 'SOURCE_MARKER') {
+                    this._currentFile = tok.fileName;
+                    this._currentLine = tok.line;
+                    continue;
+                }
+                return tok;
+            }
+            return { type: RAW_TOKEN.EOF, value: null, line: 0, col: 0, fileName: this._currentFile };
+        }
+
+        // Legacy tokenizer mode
+        if (this._tokenQueue && this._tokenQueue.length > 0) {
+            return this._tokenQueue.shift();
+        }
+        return this._tokenizer.next();
     }
 
     getToken() {
@@ -90,13 +129,7 @@ export class Scanner {
             return this._current;
         }
 
-        // Check token queue first (macro expansion)
-        if (this._tokenQueue.length > 0) {
-            this._current = this._tokenQueue.shift();
-            return this._current;
-        }
-
-        const raw = this._tokenizer.next();
+        const raw = this._nextRaw();
 
         switch (raw.type) {
             case RAW_TOKEN.NUMBER:

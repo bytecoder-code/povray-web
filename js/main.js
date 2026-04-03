@@ -4,7 +4,7 @@
 
 import { Parser } from './parser/parser.js';
 import { RenderManager } from './render/render-manager.js';
-import { loadPovz } from './io/povz-loader.js';
+import { loadPovz, createPovz } from './io/povz-loader.js';
 
 // Load bundled includes - try static import, fall back to dynamic
 let STANDARD_INCLUDES = {};
@@ -26,9 +26,11 @@ const editor = document.getElementById('scene-editor');
 const includeEditor = document.getElementById('include-editor');
 const includeSelect = document.getElementById('include-select');
 const includeCount = document.getElementById('include-count');
+const lineGutter = document.getElementById('line-gutter');
 const btnRender = document.getElementById('btn-render');
 const btnStop = document.getElementById('btn-stop');
 const btnLoad = document.getElementById('btn-load');
+const btnClearScene = document.getElementById('btn-clear-scene');
 const fileInput = document.getElementById('file-input');
 const inputWidth = document.getElementById('input-width');
 const inputHeight = document.getElementById('input-height');
@@ -84,7 +86,13 @@ async function loadFromUrl(url) {
     statusText.textContent = 'Loading scene...';
     try {
         const resp = await fetch(url);
-        if (!resp.ok) { statusText.textContent = `Failed to load: ${resp.status}`; return; }
+        if (!resp.ok) {
+            statusText.textContent = `Failed to load: ${resp.status}`;
+            appendLog(`Failed to load ${url}: HTTP ${resp.status}`, 'error');
+            showLogBadge(1);
+            switchToLogTab();
+            return;
+        }
 
         if (url.endsWith('.povz')) {
             const buffer = await resp.arrayBuffer();
@@ -96,6 +104,7 @@ async function loadFromUrl(url) {
             updateIncludeUI();
             updateAssetsUI();
             statusText.textContent = `Loaded: ${mainPov.name} (${includes.size} includes, ${assets.size} assets)`;
+            updateLineGutter();
         } else {
             editor.value = await resp.text();
             povzIncludes = new Map();
@@ -104,9 +113,13 @@ async function loadFromUrl(url) {
             updateIncludeUI();
             updateAssetsUI();
             statusText.textContent = 'Scene loaded. Click Render.';
+            updateLineGutter();
         }
     } catch (e) {
         statusText.textContent = `Load error: ${e.message}`;
+        appendLog(`Load error: ${e.message} (${url})`, 'error');
+        showLogBadge(1);
+        switchToLogTab();
         console.error('Load failed:', url, e);
     }
 }
@@ -116,6 +129,56 @@ const btnSave = document.getElementById('btn-save');
 btnRender.addEventListener('click', startRender);
 btnStop.addEventListener('click', stopRender);
 btnSave.addEventListener('click', saveImage);
+
+// --- Clear button ---
+btnClearScene.addEventListener('click', () => {
+    editor.value = '';
+    povzIncludes = new Map();
+    povzAssets = new Map();
+    currentIncludeFile = null;
+    updateIncludeUI();
+    updateAssetsUI();
+    updateLineGutter();
+    markSceneDirty();
+    statusText.textContent = 'Cleared';
+});
+
+// --- Line gutter ---
+function updateLineGutter(errorLines, warnLines) {
+    const lines = editor.value.split('\n').length;
+    const errSet = new Set(errorLines || []);
+    const warnSet = new Set(warnLines || []);
+    const parts = [];
+    for (let i = 1; i <= lines; i++) {
+        if (errSet.has(i)) parts.push(`<span class="line-err">${i}</span>`);
+        else if (warnSet.has(i)) parts.push(`<span class="line-warn">${i}</span>`);
+        else parts.push(String(i));
+    }
+    lineGutter.innerHTML = parts.join('\n');
+}
+
+// Sync gutter scroll with editor
+editor.addEventListener('scroll', () => {
+    lineGutter.scrollTop = editor.scrollTop;
+});
+
+editor.addEventListener('input', () => {
+    updateLineGutter();
+    markSceneDirty();
+});
+
+updateLineGutter();
+
+// --- Render button dirty state ---
+let lastRenderedSource = null;
+
+function markSceneDirty() {
+    if (lastRenderedSource !== null && editor.value !== lastRenderedSource) {
+        btnRender.classList.add('dirty');
+    } else {
+        btnRender.classList.remove('dirty');
+    }
+}
 
 btnLoad.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', async (e) => {
@@ -132,6 +195,7 @@ fileInput.addEventListener('change', async (e) => {
         updateIncludeUI();
         updateAssetsUI();
         statusText.textContent = `Loaded: ${file.name} (${includes.size} includes, ${assets.size} assets)`;
+        updateLineGutter();
     } else {
         const reader = new FileReader();
         reader.onload = () => {
@@ -142,6 +206,7 @@ fileInput.addEventListener('change', async (e) => {
             updateIncludeUI();
             updateAssetsUI();
             statusText.textContent = `Loaded: ${file.name}`;
+            updateLineGutter();
         };
         reader.readAsText(file);
     }
@@ -321,13 +386,49 @@ function appendLog(msg, level = 'info') {
     const span = document.createElement('span');
     span.className = `log-${level}`;
     span.textContent = msg + '\n';
+    // Make errors/warnings with line numbers clickable
+    const lineMatch = msg.match(/at <scene>:(\d+)/);
+    if (lineMatch) {
+        span.style.cursor = 'pointer';
+        span.style.textDecoration = 'underline';
+        span.addEventListener('click', () => {
+            const line = parseInt(lineMatch[1]);
+            scrollEditorToLine(line);
+        });
+    }
     logOutput.appendChild(span);
     logOutput.scrollTop = logOutput.scrollHeight;
+}
+
+function scrollEditorToLine(line) {
+    // Switch to scene tab
+    document.querySelectorAll('#editor-tabs .tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    document.querySelector('[data-tab="scene"]').classList.add('active');
+    document.getElementById('tab-scene').classList.add('active');
+    // Scroll editor to line
+    const lines = editor.value.split('\n');
+    let charPos = 0;
+    for (let i = 0; i < Math.min(line - 1, lines.length); i++) {
+        charPos += lines[i].length + 1;
+    }
+    editor.focus();
+    editor.setSelectionRange(charPos, charPos + (lines[line - 1] || '').length);
+    // Scroll so the line is visible
+    const lineHeight = 13 * 1.6; // font-size * line-height from CSS
+    editor.scrollTop = Math.max(0, (line - 5) * lineHeight);
 }
 
 function showLogBadge(count) {
     logBadge.textContent = count;
     logBadge.style.display = '';
+}
+
+function switchToLogTab() {
+    document.querySelectorAll('#viewport-tabs .vtab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.vtab-content').forEach(c => c.classList.remove('active'));
+    document.querySelector('[data-vtab="log"]').classList.add('active');
+    document.getElementById('vtab-log').classList.add('active');
 }
 
 function showError(title, details, warnings) {
@@ -360,6 +461,8 @@ async function startRender() {
     const height = parseInt(inputHeight.value) || 480;
 
     const sceneText = editor.value;
+    lastRenderedSource = sceneText;
+    btnRender.classList.remove('dirty');
 
     // Capture console.warn for parser warnings
     const warnings = [];
@@ -373,15 +476,19 @@ async function startRender() {
     try {
         statusText.textContent = 'Parsing...';
         saveCurrentInclude();
-        const parser = new Parser({ baseUrl: location.href, bundledIncludes: STANDARD_INCLUDES });
+        // Build include cache from .povz bundle includes
+        const includeCache = new Map();
         if (povzIncludes && povzIncludes.size > 0) {
             for (const [name, content] of povzIncludes) {
-                if (typeof content === 'string') {
-                    parser._includeCache.set(name, content);
-                }
+                if (typeof content === 'string') includeCache.set(name, content);
             }
         }
-        await parser.preloadIncludes(sceneText);
+
+        const parser = new Parser({
+            baseUrl: location.href,
+            bundledIncludes: STANDARD_INCLUDES,
+            includeCache,
+        });
         const sceneData = await parser.parse(sceneText);
 
         console.log(`Parsed: ${sceneData.objects.length} objects, ${sceneData.lightSources.length} lights`);
@@ -396,10 +503,50 @@ async function startRender() {
 
         statusText.textContent = `Parsed: ${sceneData.objects.length} objects, ${sceneData.lightSources.length} lights`;
 
+        // Log scene tree info
+        appendLog(`Scene: ${sceneData.objects.length} objects, ${sceneData.lightSources.length} lights`, 'info');
+        if (sceneData.camera) {
+            const c = sceneData.camera;
+            let camInfo = `Camera: location <${c.location?.map(v=>v.toFixed(2)).join(', ')}>`;
+            if (c.lookAt) camInfo += ` look_at <${c.lookAt.map(v=>v.toFixed(2)).join(', ')}>`;
+            if (c.angle) camInfo += ` angle ${c.angle}`;
+            appendLog(camInfo, 'info');
+        }
+        for (const lt of sceneData.lightSources) {
+            appendLog(`Light: <${lt.location?.map(v=>v.toFixed(1)).join(', ')}> color <${lt.color?.slice(0,3).map(v=>v.toFixed(2)).join(', ')}>`, 'info');
+        }
+        const shapeCounts = {};
+        function countShapes(objs) {
+            for (const o of objs) {
+                const t = o.shapeData?.shapeType || 'unknown';
+                if (t === 'csg') {
+                    shapeCounts[o.shapeData.csgType] = (shapeCounts[o.shapeData.csgType] || 0) + 1;
+                    if (o.shapeData.children) countShapes(o.shapeData.children);
+                } else {
+                    shapeCounts[t] = (shapeCounts[t] || 0) + 1;
+                }
+            }
+        }
+        countShapes(sceneData.objects);
+        const shapeList = Object.entries(shapeCounts).map(([k,v]) => `${v} ${k}`).join(', ');
+        appendLog(`Shapes: ${shapeList}`, 'info');
+
         // Show warnings but still render
         if (warnings.length > 0) {
             showError(`Rendered with ${warnings.length} warning(s)`, null, warnings);
         }
+
+        // Highlight error/warning lines in gutter
+        const errLines = [], warnLines = [];
+        for (const w of warnings) {
+            const m = w.match(/at <scene>:(\d+)/);
+            if (m) {
+                const line = parseInt(m[1]);
+                if (/error/i.test(w)) errLines.push(line);
+                else warnLines.push(line);
+            }
+        }
+        updateLineGutter(errLines, warnLines);
 
         const forceBackend = selectBackend.value === 'auto' ? null : selectBackend.value;
         const aaSamples = parseInt(selectAA.value) || 1;
@@ -451,6 +598,82 @@ function saveImage() {
     link.download = `${ts}.png`;
     link.href = dataURL;
     link.click();
+}
+
+// --- Save scene as .pov or .povz ---
+const btnSaveScene = document.getElementById('btn-save-scene');
+if (btnSaveScene) {
+    btnSaveScene.addEventListener('click', async () => {
+        const sceneText = editor.value;
+        if (!sceneText.trim()) {
+            statusText.textContent = 'Nothing to save — scene is empty';
+            return;
+        }
+
+        const hasIncludes = povzIncludes.size > 0 || povzAssets.size > 0;
+
+        // Build INI content with current render parameters
+        const iniLines = [
+            '; POV-Ray Web render settings',
+            `Width=${inputWidth.value || 640}`,
+            `Height=${inputHeight.value || 480}`,
+            `Antialias=${selectAA.value > 1 ? 'On' : 'Off'}`,
+        ];
+        if (selectAA.value > 1) {
+            iniLines.push(`Antialias_Threshold=0.3`);
+            iniLines.push(`Sampling_Method=2`);
+            iniLines.push(`Antialias_Depth=${Math.sqrt(parseInt(selectAA.value))}`);
+        }
+        iniLines.push(`Quality=9`);
+        const iniText = iniLines.join('\n') + '\n';
+
+        const now = new Date();
+        const ts = now.getFullYear().toString() +
+            String(now.getMonth() + 1).padStart(2, '0') +
+            String(now.getDate()).padStart(2, '0') + '_' +
+            String(now.getHours()).padStart(2, '0') +
+            String(now.getMinutes()).padStart(2, '0') +
+            String(now.getSeconds()).padStart(2, '0');
+
+        if (hasIncludes) {
+            // Save as .povz (ZIP with scene + includes + assets + ini)
+            const allIncludes = new Map(povzIncludes);
+            for (const [name, data] of povzAssets) {
+                allIncludes.set(name, data);
+            }
+            allIncludes.set('povray.ini', iniText);
+            const zipBuffer = await createPovz(`scene.pov`, sceneText, allIncludes);
+            const blob = new Blob([zipBuffer], { type: 'application/zip' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.download = `${ts}.povz`;
+            link.href = url;
+            link.click();
+            URL.revokeObjectURL(url);
+            statusText.textContent = `Saved ${ts}.povz`;
+        } else {
+            // Save as .pov with companion .ini
+            // Download .pov
+            const povBlob = new Blob([sceneText], { type: 'text/plain' });
+            const povUrl = URL.createObjectURL(povBlob);
+            const povLink = document.createElement('a');
+            povLink.download = `${ts}.pov`;
+            povLink.href = povUrl;
+            povLink.click();
+            URL.revokeObjectURL(povUrl);
+
+            // Download .ini
+            const iniBlob = new Blob([iniText], { type: 'text/plain' });
+            const iniUrl = URL.createObjectURL(iniBlob);
+            const iniLink = document.createElement('a');
+            iniLink.download = `${ts}.ini`;
+            iniLink.href = iniUrl;
+            iniLink.click();
+            URL.revokeObjectURL(iniUrl);
+
+            statusText.textContent = `Saved ${ts}.pov + ${ts}.ini`;
+        }
+    });
 }
 
 document.addEventListener('keydown', (e) => {

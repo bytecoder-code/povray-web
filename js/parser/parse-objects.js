@@ -500,6 +500,10 @@ function parseBicubicPatchObj(parser) {
 
     let type = 0, flatness = 0.01, uSteps = 4, vSteps = 4;
 
+    // Set _inVector so that < > in the body are treated as vector delimiters
+    const prevInVector = parser._inVector;
+    parser._inVector = true;
+
     // Parse optional type, flatness, u_steps, v_steps
     const peek = parser.scanner.peek();
     if (peek.id === T.TYPE_TOKEN) {
@@ -519,11 +523,29 @@ function parseBicubicPatchObj(parser) {
         vSteps = parseFloat(parser);
     }
 
+    // Handle uv_vectors before control points (POV-Ray allows this)
+    if (parser.scanner.peek().id === T.UV_VECTORS_TOKEN) {
+        parser.scanner.getToken();
+        // Read 4 UV vectors
+        for (let i = 0; i < 4; i++) parseVector(parser);
+    }
+
     // Read 16 control points
     const points = [];
     for (let i = 0; i < 16; i++) {
         if (i > 0 && parser.scanner.peek().id === T.COMMA_TOKEN) parser.scanner.getToken();
         points.push(parseVector(parser));
+    }
+    parser._inVector = prevInVector;
+
+    // Handle uv_vectors/uv_mapping after control points
+    while (parser.scanner.peek().id === T.UV_VECTORS_TOKEN ||
+           parser.scanner.peek().id === T.UV_MAPPING_TOKEN) {
+        const uvTok = parser.scanner.getToken();
+        if (uvTok.id === T.UV_VECTORS_TOKEN) {
+            for (let i = 0; i < 4; i++) parseVector(parser);
+        }
+        // uv_mapping is just a flag, no params
     }
 
     const obj = { shapeData: createBicubicPatch(type, flatness, uSteps, vSteps, points), texture: null, transform: null, flags: {} };
@@ -717,6 +739,13 @@ function parseCSG(parser, csgType) {
     const children = [];
     while (parser.scanner.peek().id !== T.RIGHT_CURLY_TOKEN &&
            parser.scanner.peek().id !== T.END_OF_FILE_TOKEN) {
+        // Handle #declare/#local inside CSG bodies (e.g. sombrero.pov loop variables)
+        const peek = parser.scanner.peek();
+        if (peek.isDirective) {
+            const tok = parser.scanner.getToken();
+            parser.handleDirective(tok);
+            continue;
+        }
         const child = parseObject(parser);
         if (child) {
             children.push(child);
@@ -747,6 +776,21 @@ function parseObjectRef(parser) {
     }
     parser.expect(T.RIGHT_CURLY_TOKEN);
     return inner;
+}
+
+// Consume an optional on/off/true/false/yes/no token after a boolean flag keyword.
+// Returns a boolean: true/false based on the token, or the default if none present.
+function consumeOptionalBool(parser, defaultVal) {
+    const next = parser.scanner.peek();
+    if (next.id === T.ON_TOKEN || next.id === T.TRUE_TOKEN || next.id === T.YES_TOKEN) {
+        parser.scanner.getToken();
+        return true;
+    }
+    if (next.id === T.OFF_TOKEN || next.id === T.FALSE_TOKEN || next.id === T.NO_TOKEN) {
+        parser.scanner.getToken();
+        return false;
+    }
+    return defaultVal;
 }
 
 export function parseObjectModifiers(parser, obj) {
@@ -810,25 +854,25 @@ export function parseObjectModifiers(parser, obj) {
             applyMatrix(obj.transform, vals);
         } else if (tok.id === T.NO_SHADOW_TOKEN) {
             parser.scanner.getToken();
-            obj.flags.noShadow = true;
+            obj.flags.noShadow = consumeOptionalBool(parser, true);
         } else if (tok.id === T.NO_IMAGE_TOKEN) {
             parser.scanner.getToken();
-            obj.flags.noImage = true;
+            obj.flags.noImage = consumeOptionalBool(parser, true);
         } else if (tok.id === T.NO_REFLECTION_TOKEN) {
             parser.scanner.getToken();
-            obj.flags.noReflection = true;
+            obj.flags.noReflection = consumeOptionalBool(parser, true);
         } else if (tok.id === T.NO_RADIOSITY_TOKEN) {
             parser.scanner.getToken();
-            obj.flags.noRadiosity = true;
+            obj.flags.noRadiosity = consumeOptionalBool(parser, true);
         } else if (tok.id === T.HOLLOW_TOKEN) {
             parser.scanner.getToken();
-            obj.flags.hollow = true;
+            obj.flags.hollow = consumeOptionalBool(parser, true);
         } else if (tok.id === T.INVERSE_TOKEN) {
             parser.scanner.getToken();
-            obj.flags.inverse = true;
+            obj.flags.inverse = consumeOptionalBool(parser, true);
         } else if (tok.id === T.DOUBLE_ILLUMINATE_TOKEN) {
             parser.scanner.getToken();
-            obj.flags.doubleIlluminate = true;
+            obj.flags.doubleIlluminate = consumeOptionalBool(parser, true);
         } else if (tok.id === T.INTERIOR_TOKEN) {
             parser.scanner.getToken();
             parser.expect(T.LEFT_CURLY_TOKEN);

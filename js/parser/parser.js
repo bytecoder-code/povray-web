@@ -2,7 +2,6 @@
 // Copyright (C) 2026 Bill Heyman (bill@heyman.ai)
 // Licensed under the GNU Affero General Public License v3.0 (see LICENSE.md)
 
-import { Tokenizer } from './tokenizer.js';
 import { Scanner } from './scanner.js';
 import { SymbolTable } from './symbol-table.js';
 import * as T from './reserved-words.js';
@@ -12,9 +11,7 @@ import { parseCamera } from './parse-camera.js';
 import { parseLightSource } from './parse-lights.js';
 import { parseGlobalSettings, parseBackground, parseFog, parseSkysphere } from './parse-global.js';
 import { handleDirective } from './parse-directives.js';
-import { resolveInclude, loadBundledIncludes } from './include-resolver.js';
-import { parseFloat as parseFloatExpr, parseVector, parseString } from './parse-expressions.js';
-import { SYMBOL_TYPE } from './symbol-table.js';
+import { Preprocessor } from './preprocessor.js';
 
 export class Parser {
     constructor(options = {}) {
@@ -22,27 +19,31 @@ export class Parser {
         this.sceneData = createSceneData();
         this.clock = options.clock || 0;
         this.baseUrl = options.baseUrl || null;
-        this.onProgress = options.onProgress || null;
-        this.tokenizer = null;
         this.scanner = null;
-        this.lastDirective = null;
-        this._includeCache = new Map();
         this._inVector = false;
-        // Accept bundled includes passed from caller (avoids dynamic import issues)
         this._bundledIncludes = options.bundledIncludes || {};
+        this._includeCache = options.includeCache || new Map();
+        this._warnCounts = new Map();   // dedup: message -> count
+        this._warnDedupLimit = 10;      // show first N, then suppress
+        this._errorCount = 0;
+        this._maxErrors = 50;
     }
 
     async parse(sceneText, fileName = '<scene>') {
-        await loadBundledIncludes();
+        // Pass 1: Preprocess — resolve includes, conditionals, macros, loops
+        const pp = new Preprocessor({
+            includeCache: this._includeCache,
+            bundledIncludes: this._bundledIncludes,
+            clock: this.clock,
+            sceneData: this.sceneData,
+        });
+        const flatTokens = pp.process(sceneText, fileName);
+        this.sceneData.languageVersion = pp.version;
 
-        this.tokenizer = new Tokenizer(sceneText, fileName);
-        this.scanner = new Scanner(this.tokenizer, this.symbolTable);
-
-        console.log(`Parser: include cache has ${this._includeCache.size} entries: [${[...this._includeCache.keys()].join(', ')}]`);
-        console.log(`Parser: bundled includes has ${Object.keys(this._bundledIncludes).length} entries`);
+        // Pass 2: Parse flat token stream into scene graph
+        this.scanner = new Scanner(flatTokens, this.symbolTable);
         this._parseStatements();
 
-        console.log(`Parser done: ${this.sceneData.objects.length} objects, ${this.sceneData.lightSources.length} lights`);
         return this.sceneData;
     }
 
@@ -59,15 +60,9 @@ export class Parser {
             const tok = this.scanner.getToken();
             if (tok.id === T.END_OF_FILE_TOKEN) return;
 
-            // Hash directives
+            // Hash directives (#declare/#local/#version/#undef survive Pass 1)
             if (tok.isDirective) {
-                const result = handleDirective(this, tok);
-                return;
-            }
-
-            // Macro invocation
-            if (tok.id === T.MACRO_ID_TOKEN) {
-                this._invokeMacro(tok);
+                handleDirective(this, tok);
                 return;
             }
 
@@ -164,13 +159,19 @@ export class Parser {
             }
     }
 
+    handleDirective(tok) {
+        handleDirective(this, tok);
+    }
+
     expect(tokenId) {
         const tok = this.scanner.getToken();
         if (tok.id !== tokenId) {
             const location = `${tok.fileName}:${tok.line}:${tok.col}`;
-            console.warn(`Parse: expected token ${tokenId}, got ${tok.id} ('${tok.value}') at ${location}`);
-            // Don't consume the unexpected token — put it back for recovery
-            this.scanner.ungetToken();
+            this._warnDedup(`Parse: expected token ${tokenId}, got ${tok.id} ('${tok.value}') at ${location}`);
+            this._errorCount++;
+            if (this._errorCount >= this._maxErrors) {
+                throw new Error(`Too many parse errors (${this._maxErrors}), aborting`);
+            }
         }
         return tok;
     }
@@ -178,57 +179,39 @@ export class Parser {
     error(msg, tok) {
         const location = tok ? ` at ${tok.fileName}:${tok.line}:${tok.col}` : '';
         const err = new Error(`Parse error${location}: ${msg}`);
+        this._errorCount++;
         if (this._strictMode) throw err;
-        console.warn(err.message);
-        // Try to recover by skipping to next statement
+        this._warnDedup(err.message);
+        if (this._errorCount >= this._maxErrors) {
+            throw new Error(`Too many parse errors (${this._maxErrors}), aborting`);
+        }
         return null;
     }
 
     warn(msg, tok) {
         const location = tok ? ` at ${tok.fileName}:${tok.line}:${tok.col}` : '';
-        console.warn(`Parse warning${location}: ${msg}`);
+        this._warnDedup(`Parse warning${location}: ${msg}`);
     }
 
-    _invokeMacro(tok) {
-        const macro = tok.value; // { params, bodyTokens }
-        if (!macro || !macro.params || !macro.bodyTokens) {
-            this.warn(`Invalid macro invocation: ${tok.name}`, tok);
-            return;
+    _warnDedup(msg) {
+        const count = (this._warnCounts.get(msg) || 0) + 1;
+        this._warnCounts.set(msg, count);
+        if (count <= this._warnDedupLimit) {
+            console.warn(msg);
+        } else if (count === this._warnDedupLimit + 1) {
+            console.warn(`... suppressing further "${msg.slice(0, 80)}" warnings`);
         }
+        // Beyond limit+1: silently suppressed
+    }
 
-        // Parse arguments
-        this.expect(T.LEFT_PAREN_TOKEN);
-        const args = [];
-        for (let i = 0; i < macro.params.length; i++) {
-            if (i > 0) this.expect(T.COMMA_TOKEN);
-            // Try to parse as float first, then vector, then string
-            const peek = this.scanner.peek();
-            if (peek.id === T.STRING_LITERAL_TOKEN || peek.id === T.CONCAT_TOKEN) {
-                args.push(parseString(this));
-            } else if (peek.id === T.LEFT_ANGLE_TOKEN || peek.id === T.X_TOKEN ||
-                       peek.id === T.Y_TOKEN || peek.id === T.Z_TOKEN) {
-                args.push(parseVector(this));
-            } else {
-                args.push(parseFloatExpr(this));
+    getWarningSummary() {
+        const suppressed = [];
+        for (const [msg, count] of this._warnCounts) {
+            if (count > this._warnDedupLimit) {
+                suppressed.push(`${msg.slice(0, 120)}... (${count} total, ${count - this._warnDedupLimit} suppressed)`);
             }
         }
-        this.expect(T.RIGHT_PAREN_TOKEN);
-
-        // Push scope and bind parameters
-        this.symbolTable.pushScope();
-        for (let i = 0; i < macro.params.length; i++) {
-            const val = args[i];
-            const type = Array.isArray(val) ? SYMBOL_TYPE.VECTOR :
-                         typeof val === 'string' ? SYMBOL_TYPE.STRING : SYMBOL_TYPE.FLOAT;
-            this.symbolTable.declare(macro.params[i], type, val, true);
-        }
-
-        // Replay body tokens via the scanner queue
-        this.scanner.pushTokens([...macro.bodyTokens]);
-    }
-
-    _popMacroScope() {
-        this.symbolTable.popScope();
+        return suppressed;
     }
 
     skipBlock() {
@@ -243,107 +226,4 @@ export class Parser {
         }
     }
 
-    includeFile(filename) {
-        // Check preloaded cache first
-        if (this._includeCache.has(filename)) {
-            const content = this._includeCache.get(filename);
-            console.log(`#include "${filename}" from cache (${content ? content.length : 0} chars)`);
-            if (content) this.tokenizer.pushSource(content, filename);
-            return;
-        }
-        // Try loading from bundled includes synchronously
-        console.log(`#include "${filename}" — not in cache, checking bundled (${Object.keys(this._bundledIncludes).length} entries)`);
-        if (this._bundledIncludes && this._bundledIncludes[filename]) {
-            this._includeCache.set(filename, this._bundledIncludes[filename]);
-            this.tokenizer.pushSource(this._bundledIncludes[filename], filename);
-            return;
-        }
-        // Try lowercase
-        const lower = filename.toLowerCase();
-        if (this._bundledIncludes && this._bundledIncludes[lower]) {
-            this._includeCache.set(filename, this._bundledIncludes[lower]);
-            this.tokenizer.pushSource(this._bundledIncludes[lower], filename);
-            return;
-        }
-        console.warn(`#include "${filename}" not available`);
-    }
-
-    async preloadIncludes(sceneText) {
-        // Quick scan for #include directives and preload non-bundled ones
-        const includeRegex = /#include\s+"([^"]+)"/g;
-        let match;
-        while ((match = includeRegex.exec(sceneText)) !== null) {
-            const filename = match[1];
-            // Skip if already cached or available in bundled includes
-            if (this._includeCache.has(filename)) continue;
-            if (this._bundledIncludes[filename]) continue;
-            if (this._bundledIncludes[filename.toLowerCase()]) continue;
-
-            const content = await resolveInclude(filename, this.baseUrl);
-            if (content) {
-                this._includeCache.set(filename, content);
-                await this.preloadIncludes(content);
-            }
-        }
-    }
-
-    // For directive handling: parse until we hit one of the specified directives
-    parseUntilDirective(directives) {
-        while (true) {
-            const tok = this.scanner.getToken();
-            if (tok.id === T.END_OF_FILE_TOKEN) break;
-            if (tok.isDirective && directives.includes(tok.value)) {
-                this.lastDirective = tok.value;
-                return;
-            }
-            // Process ONE statement, then check for directive again
-            this.scanner.ungetToken();
-            this._parseOneStatement();
-            break; // After parseStatements returns, check again
-        }
-    }
-
-    skipUntilDirective(directives) {
-        let depth = 0;
-        while (true) {
-            const tok = this.scanner.getToken();
-            if (tok.id === T.END_OF_FILE_TOKEN) break;
-            if (tok.isDirective) {
-                if ((tok.value === 'if' || tok.value === 'ifdef' || tok.value === 'ifndef' ||
-                     tok.value === 'while' || tok.value === 'for' || tok.value === 'switch' ||
-                     tok.value === 'macro') && !directives.includes(tok.value)) {
-                    depth++;
-                } else if (tok.value === 'end') {
-                    if (depth > 0) {
-                        depth--;
-                    } else if (directives.includes('end')) {
-                        this.lastDirective = 'end';
-                        return;
-                    }
-                } else if (depth === 0 && directives.includes(tok.value)) {
-                    this.lastDirective = tok.value;
-                    return;
-                }
-            }
-        }
-    }
-
-    savePosition() {
-        return {
-            srcIndex: this.tokenizer._sources.length - 1,
-            pos: this.tokenizer._src.pos,
-            line: this.tokenizer._src.line,
-            col: this.tokenizer._src.col
-        };
-    }
-
-    restorePosition(saved, pos) {
-        // Simplified position restore for while loops
-        const s = this.tokenizer._sources[saved.srcIndex];
-        if (s) {
-            s.pos = saved.pos;
-            s.line = saved.line;
-            s.col = saved.col;
-        }
-    }
 }

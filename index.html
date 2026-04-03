@@ -19,11 +19,12 @@
 <body>
     <div id="app">
         <header id="header">
-            <h1>POV-Ray Web <span class="version">1.0.0</span></h1>
+            <h1>POV-Ray Web <span class="version">1.1.0</span></h1>
             <div id="controls">
                 <button id="btn-render" title="Render scene">Render</button>
                 <button id="btn-stop" title="Stop rendering" disabled>Stop</button>
-                <button id="btn-save" title="Save rendered image (Ctrl+S)">Save</button>
+                <button id="btn-save" title="Save rendered image (Ctrl+S)">Save Image</button>
+                <button id="btn-save-scene" title="Save scene as .pov or .povz">Save Scene</button>
                 <select id="select-backend" title="Rendering backend">
                     <option value="auto">Auto</option>
                     <option value="webgpu">WebGPU</option>
@@ -44,7 +45,6 @@
                         <option value="16">16x</option>
                     </select>
                 </label>
-                <span id="status-text">Ready</span>
             </div>
         </header>
         <main id="main">
@@ -55,11 +55,14 @@
                         <button class="tab" data-tab="includes">Includes <span id="include-count"></span></button>
                         <button class="tab" data-tab="assets">Assets <span id="asset-count"></span></button>
                     </div>
-                    <button id="btn-load" title="Load .pov or .povz file">Load File</button>
+                    <button id="btn-load" title="Load .pov or .povz file">Load</button>
+                    <button id="btn-clear-scene" title="Clear scene, includes, and assets">Clear</button>
                     <input type="file" id="file-input" accept=".pov,.povz,.inc,.ini" style="display:none">
                 </div>
                 <div id="tab-scene" class="tab-content active">
-                <textarea id="scene-editor" spellcheck="false">// POV-Ray Web — Primitives Showcase
+                <div id="editor-wrap">
+                    <div id="line-gutter" aria-hidden="true"></div>
+                    <textarea id="scene-editor" spellcheck="false">// POV-Ray Web — Primitives Showcase
 
 camera {
     location <0, 3.5, -8>
@@ -129,6 +132,7 @@ plane {
 background { color rgb <0.08, 0.08, 0.12> }
 </textarea>
                 </div>
+                </div>
                 <div id="tab-includes" class="tab-content">
                     <div id="includes-toolbar">
                         <select id="include-select"><option value="">No includes loaded</option></select>
@@ -161,6 +165,9 @@ background { color rgb <0.08, 0.08, 0.12> }
                 </div>
                 <div id="progress-bar-container">
                     <div id="progress-bar"></div>
+                </div>
+                <div id="status-bar">
+                    <span id="status-text">Ready</span>
                 </div>
             </div>
         </main>

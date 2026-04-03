@@ -506,7 +506,9 @@ export function parseColour(parser) {
     // Colour identifier
     if (tok.id === T.COLOUR_ID_TOKEN) {
         parser.scanner.getToken();
-        return Array.isArray(tok.value) ? tok.value : [0, 0, 0, 0, 0];
+        const color = Array.isArray(tok.value) ? [...tok.value] : [0, 0, 0, 0, 0];
+        while (color.length < 5) color.push(0);
+        return applyColourModifiers(parser, color);
     }
 
     // rgb/rgbf/rgbt/rgbft/srgb variants
@@ -537,7 +539,8 @@ export function parseColour(parser) {
             }
         }
 
-        return color;
+        // Handle trailing filter/transmit modifiers (e.g., rgb <1,0,0> filter 0.5)
+        return applyColourModifiers(parser, color);
     }
 
     // colour keyword followed by color spec
@@ -564,6 +567,23 @@ export function parseColour(parser) {
     // Standalone color from vector
     const v = parseVector(parser);
     return [v[0] || 0, v[1] || 0, v[2] || 0, v[3] || 0, v[4] || 0];
+}
+
+// Consume optional trailing filter/transmit modifiers after a color specification
+function applyColourModifiers(parser, color) {
+    while (true) {
+        const next = parser.scanner.peek();
+        if (next.id === T.FILTER_TOKEN) {
+            parser.scanner.getToken();
+            color[3] = parseFloat(parser);
+        } else if (next.id === T.TRANSMIT_TOKEN) {
+            parser.scanner.getToken();
+            color[4] = parseFloat(parser);
+        } else {
+            break;
+        }
+    }
+    return color;
 }
 
 function srgbToLinear(c) {
